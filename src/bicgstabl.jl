@@ -78,27 +78,41 @@ end
 
 function iterate(it::BiCGStabIterable, iteration::Int=start(it))
     if done(it, iteration) return nothing end
+    @info "" it.residual it.reltol
 
     T = eltype(it.x)
+    zero_tol = 10 * eps(T)
     L = 2 : it.l + 1
 
     it.σ = -it.ω * it.σ
+    @info "" it.σ it.rs
 
     ## BiCG part
     for j = 1 : it.l
         ρ = dot(it.r_shadow, view(it.rs, :, j))
         β = ρ / it.σ
+        @info "" ρ β
 
         # us[:, 1 : j] .= rs[:, 1 : j] - β * us[:, 1 : j]
         it.us[:, 1 : j] .= it.rs[:, 1 : j] .- β .* it.us[:, 1 : j]
+        @info "" it.us
 
         # us[:, j + 1] = Pl \ (A * us[:, j])
         next_u = view(it.us, :, j + 1)
         mul!(next_u, it.A, view(it.us, :, j))
         ldiv!(it.Pl, next_u)
+        @info "" next_u
 
         it.σ = dot(it.r_shadow, next_u)
-        α = ρ / it.σ
+        @info "" it.r_shadow next_u
+        if abs(ρ) < zero_tol && abs(it.σ) < zero_tol
+            # The system is already solved exactly and we can only get problems
+            # if we try to divide zero by zero to get α below.
+            α = zero(T)
+        else
+            α = ρ / it.σ
+        end
+        @info "" α ρ it.σ
 
         it.rs[:, 1 : j] .-= α .* it.us[:, 2 : j + 1]
 
@@ -106,6 +120,7 @@ function iterate(it::BiCGStabIterable, iteration::Int=start(it))
         next_r = view(it.rs, :, j + 1)
         mul!(next_r, it.A , view(it.rs, :, j))
         ldiv!(it.Pl, next_r)
+        @info "" next_r
 
         # x = x + α * us[:, 1]
         it.x .+= α .* view(it.us, :, 1)
@@ -118,6 +133,7 @@ function iterate(it::BiCGStabIterable, iteration::Int=start(it))
 
     # M = rs' * rs
     mul!(it.M, adjoint(it.rs), it.rs)
+    @info "" it.rs it.M it.γ
 
     # γ = M[L, L] \ M[L, 1]
     F = lu!(view(it.M, L, L))
@@ -187,7 +203,7 @@ function bicgstabl!(x, A, b, l = 2;
     # This doesn't yet make sense: the number of iters is smaller.
     log && reserve!(history, :resnorm, max_mv_products)
 
-    # Actually perform CG
+    # Actually perform BiCGStab(l)
     iterable = bicgstabl_iterator!(x, A, b, l; Pl = Pl, tol = tol, max_mv_products = max_mv_products, kwargs...)
 
     if log
